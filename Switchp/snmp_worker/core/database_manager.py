@@ -251,7 +251,9 @@ class DatabaseManager:
         port_number: Optional[int] = None,
         mac_address: Optional[str] = None,
         from_port: Optional[int] = None,
-        to_port: Optional[int] = None
+        to_port: Optional[int] = None,
+        old_vlan_id: Optional[int] = None,
+        new_vlan_id: Optional[int] = None
     ) -> tuple[Alarm, bool]:
         """
         Get existing active alarm or create new one with uniqueness checking.
@@ -276,6 +278,8 @@ class DatabaseManager:
             mac_address: MAC address involved in alarm
             from_port: Source port for MAC moved alarms
             to_port: Destination port for MAC moved alarms
+            old_vlan_id: Old VLAN ID (for VLAN change tracking)
+            new_vlan_id: New VLAN ID (for VLAN change tracking)
             
         Returns:
             Tuple of (Alarm instance or None, is_new)
@@ -346,6 +350,8 @@ class DatabaseManager:
             mac_address=mac_address,
             from_port=from_port,
             to_port=to_port,
+            old_vlan_id=old_vlan_id,
+            new_vlan_id=new_vlan_id,
             alarm_fingerprint=fingerprint,
             status=AlarmStatus.ACTIVE,
             occurrence_count=1

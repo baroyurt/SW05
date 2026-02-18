@@ -356,7 +356,8 @@ class PortChangeDetector:
                     mac_tracking.current_port_number,
                     device,
                     port_number,
-                    vlan_id
+                    vlan_id,
+                    old_vlan_id=mac_tracking.current_vlan_id
                 )
                 
                 # Update MAC tracking
@@ -586,7 +587,8 @@ class PortChangeDetector:
         old_port: Optional[int],
         new_device: SNMPDevice,
         new_port: int,
-        vlan_id: Optional[int]
+        vlan_id: Optional[int],
+        old_vlan_id: Optional[int] = None
     ) -> PortChangeHistory:
         """Record a MAC address movement and create alarm."""
         
@@ -695,7 +697,9 @@ class PortChangeDetector:
             port_number=new_port,
             mac_address=mac_address,
             from_port=old_port,
-            to_port=new_port
+            to_port=new_port,
+            old_vlan_id=old_vlan_id,
+            new_vlan_id=vlan_id
         )
         
         if alarm:
@@ -990,10 +994,25 @@ class PortChangeDetector:
             change.alarm_id = alarm.id
             alarm.old_value = f"Expected: {expected_mac}"
             alarm.new_value = f"Found: {actual_mac_display}"
+            
+            # Send notifications for new alarms
+            if is_new:
+                self.alarm_manager._send_notifications(
+                    device,
+                    "mac_moved",
+                    "HIGH",
+                    change_details,
+                    port_number=current.port_number,
+                    port_name=f"Port {current.port_number}"
+                )
+                alarm.notification_sent = True
+                alarm.last_notification_sent = datetime.utcnow()
+            
             self.logger.warning("=" * 80)
             self.logger.warning(f"✅ ✅ ✅  MAC MISMATCH ALARM CREATED SUCCESSFULLY  ✅ ✅ ✅")
             self.logger.warning(f"Alarm ID: {alarm.id}")
             self.logger.warning(f"Is New: {is_new}")
+            self.logger.warning(f"Notification Sent: {is_new}")
             self.logger.warning(f"Old Value: {alarm.old_value}")
             self.logger.warning(f"New Value: {alarm.new_value}")
             self.logger.warning(f"Severity: HIGH")

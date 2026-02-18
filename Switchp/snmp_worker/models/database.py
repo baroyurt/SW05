@@ -240,6 +240,8 @@ class Alarm(Base):
     new_value = Column(Text)  # New value (for change detection)
     from_port = Column(Integer)  # Source port (for MAC moved)
     to_port = Column(Integer)  # Destination port (for MAC moved)
+    old_vlan_id = Column(Integer)  # Old VLAN ID (for VLAN change tracking)
+    new_vlan_id = Column(Integer)  # New VLAN ID (for VLAN change tracking)
     
     # Alarm uniqueness fingerprint
     alarm_fingerprint = Column(String(255))  # Unique identifier to prevent duplicates

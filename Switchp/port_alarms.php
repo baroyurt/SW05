@@ -29,6 +29,14 @@ function getActiveAlarmsData($conn) {
         $columns_to_select .= ", NULL as from_port, NULL as to_port";
     }
     
+    // Check for VLAN columns
+    $result = $conn->query("SHOW COLUMNS FROM alarms LIKE 'old_vlan_id'");
+    if ($result && $result->num_rows > 0) {
+        $columns_to_select .= ", a.old_vlan_id, a.new_vlan_id";
+    } else {
+        $columns_to_select .= ", NULL as old_vlan_id, NULL as new_vlan_id";
+    }
+    
     $sql = "SELECT 
                 $columns_to_select,
                 d.name as device_name, d.ip_address as device_ip,
@@ -739,11 +747,13 @@ $alarmsData = getActiveAlarmsData($conn);
                         
                         ${alarm.details ? `<div class="alarm-details">${escapeHtml(alarm.details)}</div>` : ''}
                         
-                        ${alarm.mac_address || alarm.old_value || alarm.new_value ? `
+                        ${alarm.mac_address || alarm.old_value || alarm.new_value || alarm.old_vlan_id || alarm.new_vlan_id ? `
                             <div class="alarm-additional-info">
                                 ${alarm.mac_address ? `<div><strong>MAC Address:</strong> ${alarm.mac_address}</div>` : ''}
                                 ${alarm.old_value ? `<div><strong>Eski Değer:</strong> ${alarm.old_value}</div>` : ''}
                                 ${alarm.new_value ? `<div><strong>Yeni Değer:</strong> ${alarm.new_value}</div>` : ''}
+                                ${alarm.old_vlan_id ? `<div><strong>Eski VLAN ID:</strong> ${alarm.old_vlan_id}</div>` : ''}
+                                ${alarm.new_vlan_id ? `<div><strong>Yeni VLAN ID:</strong> ${alarm.new_vlan_id}</div>` : ''}
                             </div>
                         ` : ''}
                         
