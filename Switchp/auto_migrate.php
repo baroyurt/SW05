@@ -34,6 +34,7 @@ class AutoMigrate {
         'add_polling_data_columns.py',
         'add_port_config_columns.py',
         'add_alarm_notification_columns.py',
+        'add_vlan_columns_to_alarms.py',
         'fix_status_enum_uppercase.py'
     ];
     
