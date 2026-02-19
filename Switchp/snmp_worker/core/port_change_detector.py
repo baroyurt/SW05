@@ -908,11 +908,22 @@ class PortChangeDetector:
         current_mac = current_mac.strip()
         previous_mac = previous_mac.strip()
         
+        # DEBUG LOGGING - Her zaman göster
+        self.logger.info("=" * 80)
+        self.logger.info(f"🔍 MAC DEĞİŞİKLİĞİ KONTROLÜ - {device.name} Port {current.port_number}")
+        self.logger.info(f"   Önceki MAC: '{previous_mac}'")
+        self.logger.info(f"   Şimdiki MAC: '{current_mac}'")
+        self.logger.info(f"   Eşit mi? {current_mac == previous_mac}")
+        self.logger.info("=" * 80)
+        
         if current_mac != previous_mac:
             change_details = (
                 f"MAC address changed on {device.name} port {current.port_number} "
                 f"from '{previous_mac or '(empty)'}' to '{current_mac or '(empty)'}'"
             )
+            
+            self.logger.warning("🚨 MAC DEĞİŞİKLİĞİ TESPİT EDİLDİ!")
+            self.logger.warning(f"   Change Details: {change_details}")
             
             change = PortChangeHistory(
                 device_id=device.id,
@@ -926,7 +937,10 @@ class PortChangeDetector:
             session.add(change)
             session.flush()
             
+            self.logger.warning(f"   ✅ Change History kaydedildi (ID: {change.id})")
+            
             # Create alarm for MAC address change
+            self.logger.warning(f"   📢 Alarm oluşturuluyor...")
             alarm, is_new = self.db_manager.get_or_create_alarm(
                 session,
                 device,
@@ -939,6 +953,7 @@ class PortChangeDetector:
             )
             
             if alarm:
+                self.logger.warning(f"   ✅ Alarm {'OLUŞTURULDU' if is_new else 'GÜNCELLENDI'} (ID: {alarm.id})")
                 change.alarm_created = True
                 change.alarm_id = alarm.id
                 # Açıklama değişikliği gibi format
@@ -946,8 +961,12 @@ class PortChangeDetector:
                 alarm.old_value = previous_mac or '(empty)'
                 alarm.new_value = current_mac or '(empty)'
                 
+                self.logger.warning(f"   Alarm Old Value: {alarm.old_value}")
+                self.logger.warning(f"   Alarm New Value: {alarm.new_value}")
+                
                 # Send notifications for new alarms
                 if is_new:
+                    self.logger.warning(f"   📧 Bildirim gönderiliyor...")
                     self.alarm_manager._send_notifications(
                         device,
                         "mac_moved",
@@ -958,10 +977,17 @@ class PortChangeDetector:
                     )
                     alarm.notification_sent = True
                     alarm.last_notification_sent = datetime.utcnow()
+                    self.logger.warning(f"   ✅ Bildirim gönderildi!")
+                else:
+                    self.logger.warning(f"   ⚠️ Yeni alarm değil, bildirim gönderilmedi")
+            else:
+                self.logger.error(f"   ❌ ALARM OLUŞTURULAMADI!")
             
             self.logger.warning(change_details)
             
             return change
+        else:
+            self.logger.debug(f"   ℹ️ MAC değişmedi, alarm gerekmiyor")
         
         return None
     
