@@ -106,7 +106,9 @@ class CiscoCBS350Mapper(VendorOIDMapper):
                         
                         # Parse bitmap to find which ports are in this VLAN
                         # CBS350-24FP has 28 ports (24 PoE + 4 SFP)
-                        for port_num in range(1, 29):  # Ports 1-28
+                        # Process up to however many ports the mask supports
+                        max_ports = min(mask_len * 8, 52)  # Support up to 52 ports (6.5 bytes)
+                        for port_num in range(1, max_ports + 1):
                             byte_pos = (port_num - 1) // 8
                             bit_pos = 7 - ((port_num - 1) % 8)  # MSB first
                             
@@ -131,7 +133,8 @@ class CiscoCBS350Mapper(VendorOIDMapper):
                 
                 # Filter for physical ethernet ports
                 # CBS350 uses names like "gi1", "gi2" or "Gi1/0/1"
-                if any(x in descr.lower() for x in ['gi', 'gigabit', 'ethernet']):
+                # Also include fiber/SFP ports (typically gi25-gi28 or similar)
+                if any(x in descr.lower() for x in ['gi', 'gigabit', 'ethernet', 'sfp', 'fiber']):
                     # Skip management, virtual interfaces, and port-channels
                     if not any(x in descr.lower() for x in ['vlan', 'management', 'null', 'loopback', 'port-channel']):
                         ports[if_index] = {
@@ -210,17 +213,22 @@ class CiscoCBS350Mapper(VendorOIDMapper):
             port_name = port_data.get('port_name', '').lower()
             
             # Try to extract number from names like "gi7", "gi1/0/7", "GigabitEthernet7"
+            # Also handle SFP/fiber port names
             import re
             match = re.search(r'(\d+)(?:/0/(\d+))?$', port_name)
             if match:
                 # For formats like "gi1/0/7", use the last number
                 port_num = int(match.group(2) if match.group(2) else match.group(1))
-            elif if_index <= 28:  # Direct mapping for CBS350's 28 ports
+            elif if_index <= 52:  # Direct mapping for reasonable port counts
                 port_num = if_index
             
-            # Assign VLAN if we found the port number
-            if port_num and port_num in vlan_port_map:
-                ports[if_index]['vlan_id'] = vlan_port_map[port_num]
+            # Update the port_number field with the extracted port number
+            if port_num:
+                ports[if_index]['port_number'] = port_num
+                
+                # Assign VLAN if we found the port number
+                if port_num in vlan_port_map:
+                    ports[if_index]['vlan_id'] = vlan_port_map[port_num]
         
         # Convert to PortInfo objects
         port_list = []
