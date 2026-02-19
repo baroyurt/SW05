@@ -925,6 +925,13 @@ class PortChangeDetector:
             # Check if this is a meaningful change (both MACs are non-empty)
             both_have_mac = bool(previous_mac) and bool(current_mac)
             
+            self.logger.warning("=" * 80)
+            self.logger.warning(f"🔍 _detect_mac_address_change ÇALIŞTI")
+            self.logger.warning(f"   Önceki MAC: '{previous_mac}'")
+            self.logger.warning(f"   Şimdiki MAC: '{current_mac}'")
+            self.logger.warning(f"   both_have_mac: {both_have_mac}")
+            self.logger.warning("=" * 80)
+            
             if not both_have_mac:
                 # One or both MACs are empty - this is connect/disconnect, not device swap
                 self.logger.info(
