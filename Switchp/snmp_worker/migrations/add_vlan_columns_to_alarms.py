@@ -120,18 +120,14 @@ def main():
         
         if success:
             print()
-            print("✓ Migration completed successfully!")
-            print()
             print("=" * 60)
-            print("Migration completed successfully!")
+            print("✓ Migration completed successfully!")
             print("=" * 60)
             return 0
         else:
             print()
-            print("✗ Migration failed!")
-            print()
             print("=" * 60)
-            print("Migration failed!")
+            print("✗ Migration failed!")
             print("=" * 60)
             return 1
             
