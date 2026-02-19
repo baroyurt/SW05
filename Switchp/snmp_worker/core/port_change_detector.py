@@ -877,7 +877,24 @@ class PortChangeDetector:
         previous: PortSnapshot
     ) -> Optional[PortChangeHistory]:
         """
+        SNMP snapshot'ları karşılaştırarak MAC adresi değişikliklerini tespit et.
+        
         Detect MAC address changes by comparing current vs previous snapshot.
+        
+        TÜRKÇE AÇIKLAMA:
+        Bu fonksiyon, SNMP'nin önceki taramada gördüğü MAC ile şimdiki taramada
+        gördüğü MAC'i karşılaştırır. Fiziksel olarak cihaz değiştirildiğinde çalışır.
+        
+        FARK NEDİR?
+        1. _detect_mac_address_change (BU FONKSİYON):
+           - SNMP önceki tarama: MAC = 12:74
+           - SNMP şimdiki tarama: MAC = 12:6a
+           - Fiziksel cihaz değişti, alarm oluştur
+        
+        2. _detect_mac_config_mismatch (DİĞER FONKSİYON):
+           - Kullanıcı UI'da kaydettiği: MAC = 12:6a
+           - SNMP cihazdan okuduğu: MAC = 12:74
+           - Kullanıcının beklediği ile gerçek farklı, alarm oluştur
         
         Similar to description change detection, this creates an alarm when
         the MAC address on a port changes, showing old and new values.
@@ -924,6 +941,8 @@ class PortChangeDetector:
             if alarm:
                 change.alarm_created = True
                 change.alarm_id = alarm.id
+                # Açıklama değişikliği gibi format
+                # Format like description changes
                 alarm.old_value = previous_mac or '(empty)'
                 alarm.new_value = current_mac or '(empty)'
                 
@@ -954,19 +973,32 @@ class PortChangeDetector:
         previous: PortSnapshot
     ) -> Optional[PortChangeHistory]:
         """
+        MAC adresi yapılandırma uyuşmazlıklarını tespit et.
+        
         Detect MAC address configuration mismatches.
+        
+        TÜRKÇE AÇIKLAMA:
+        Bu fonksiyon, kullanıcının ports tablosunda kaydettiği "beklenen MAC" ile
+        SNMP'nin cihazdan okuduğu "gerçek MAC" arasındaki farkı kontrol eder.
+        
+        FARK NEDİR?
+        - Açıklama değişikliği: SNMP switch'ten okur, switch üzerinde değişir
+        - MAC değişikliği: Kullanıcı UI'da değiştirir ama cihaz aynı kalır
+        
+        SENARYO:
+        1. Kullanıcı port'a MAC adresi yazıyor (ör: d0:ad:08:e4:12:6a)
+        2. SNMP cihazdan farklı MAC görüyor (ör: d0:ad:08:e4:12:74)
+        3. Bu fonksiyon uyuşmazlığı tespit edip alarm oluşturuyor
         
         Checks if the MAC address configured in the ports table differs from
         what SNMP actually finds on the port. This detects cases where:
         1. User manually configures an expected MAC in the ports table
         2. SNMP discovers a different MAC on that port
         3. This indicates unauthorized device or configuration error
-        
-        Similar to description change detection, this creates an alarm
-        when configured values don't match reality.
         """
         
         # Get the expected/configured MAC from ports table
+        # Ports tablosundan beklenen/yapılandırılmış MAC'i al
         expected_mac = self._get_expected_mac_for_port(session, device, current.port_number)
         
         self.logger.debug(
@@ -975,11 +1007,13 @@ class PortChangeDetector:
         )
         
         # If no expected MAC is configured, nothing to check
+        # Beklenen MAC yapılandırılmamışsa, kontrol etmeye gerek yok
         if not expected_mac:
             self.logger.debug(f"No expected MAC configured for port {current.port_number}, skipping check")
             return None
         
         # Get current MAC from SNMP data
+        # SNMP verilerinden mevcut MAC'i al
         current_macs = self._parse_mac_addresses(
             current.mac_address,
             current.mac_addresses
@@ -990,18 +1024,23 @@ class PortChangeDetector:
         )
         
         # Check if expected MAC is present
+        # Beklenen MAC mevcut mu kontrol et
         if expected_mac in current_macs:
             # Expected MAC found - no mismatch
+            # Beklenen MAC bulundu - uyuşmazlık yok
             self.logger.debug(
                 f"Expected MAC {expected_mac} found on port {current.port_number} - no alarm"
             )
             return None
         
         # Mismatch detected! Expected MAC not found on port
+        # Uyuşmazlık tespit edildi! Beklenen MAC port'ta bulunamadı
+        
         # Determine what MAC is actually there
         actual_mac = current.mac_address.upper() if current.mac_address else None
         
         # Check if port has no MAC (device disconnected)
+        # Port'ta MAC var mı kontrol et (cihaz bağlantısı kesilmiş olabilir)
         if not current_macs:
             # Port is empty but we expected a MAC
             # Check if we already have a tracking entry for this port
@@ -1033,12 +1072,12 @@ class PortChangeDetector:
             return None
         
         # Port has MAC(s) but not the expected one - this IS a real mismatch
+        # Port'ta MAC var ama beklenen değil - bu GERÇEK bir uyuşmazlık
         actual_mac_list = ', '.join(sorted(current_macs))
         change_details = (
-            f"MAC configuration mismatch on {device.name} port {current.port_number}: "
+            f"MAC address mismatch on {device.name} port {current.port_number}: "
             f"Expected '{expected_mac}' but found '{actual_mac_list}'"
         )
-        actual_mac_display = actual_mac_list
         
         self.logger.warning("=" * 80)
         self.logger.warning(f"⚠️ ⚠️ ⚠️  MAC CONFIGURATION MISMATCH DETECTED  ⚠️ ⚠️ ⚠️")
@@ -1079,8 +1118,10 @@ class PortChangeDetector:
         if alarm:
             change.alarm_created = True
             change.alarm_id = alarm.id
-            alarm.old_value = f"Expected: {expected_mac}"
-            alarm.new_value = f"Found: {actual_mac_display}"
+            # AÇIKLAMA DEĞİŞİKLİĞİ GİBİ FORMAT: Eski Değer / Yeni Değer
+            # Format like description changes: Old Value / New Value
+            alarm.old_value = expected_mac  # Kullanıcının beklediği MAC (UI'da yazdığı)
+            alarm.new_value = actual_mac_list  # SNMP'nin gördüğü gerçek MAC
             
             # Send notifications for new alarms
             if is_new:
@@ -1100,8 +1141,8 @@ class PortChangeDetector:
             self.logger.warning(f"Alarm ID: {alarm.id}")
             self.logger.warning(f"Is New: {is_new}")
             self.logger.warning(f"Notification Sent: {is_new}")
-            self.logger.warning(f"Old Value: {alarm.old_value}")
-            self.logger.warning(f"New Value: {alarm.new_value}")
+            self.logger.warning(f"Old Value (Expected): {alarm.old_value}")
+            self.logger.warning(f"New Value (Found): {alarm.new_value}")
             self.logger.warning(f"Severity: HIGH")
             self.logger.warning("=" * 80)
         else:
