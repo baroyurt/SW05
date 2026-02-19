@@ -1174,7 +1174,8 @@ class PortChangeDetector:
         self.logger.warning(f"✅ Creating MAC mismatch alarm for {device.name} port {current.port_number}")
         
         # Use the first actual MAC for alarm fingerprint (or all if multiple)
-        alarm_mac = current_macs[0] if current_macs else None
+        # current_macs is a SET, need to convert to list to get first element
+        alarm_mac = list(current_macs)[0] if current_macs else None
         
         # Create alarm for MAC mismatch
         # IMPORTANT: skip_whitelist=True because this is a configuration mismatch
