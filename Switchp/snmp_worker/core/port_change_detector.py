@@ -116,6 +116,16 @@ class PortChangeDetector:
         if desc_change:
             changes.append(desc_change)
         
+        # Check for MAC address changes (comparing snapshots)
+        mac_addr_change = self._detect_mac_address_change(
+            session,
+            device,
+            current_port_data,
+            previous_snapshot
+        )
+        if mac_addr_change:
+            changes.append(mac_addr_change)
+        
         # Check for MAC configuration mismatches (expected vs actual)
         mac_config_change = self._detect_mac_config_mismatch(
             session,
@@ -854,6 +864,83 @@ class PortChangeDetector:
                 alarm.new_value = current_desc or '(empty)'
             
             self.logger.info(change_details)
+            
+            return change
+        
+        return None
+    
+    def _detect_mac_address_change(
+        self,
+        session: Session,
+        device: SNMPDevice,
+        current: PortStatusData,
+        previous: PortSnapshot
+    ) -> Optional[PortChangeHistory]:
+        """
+        Detect MAC address changes by comparing current vs previous snapshot.
+        
+        Similar to description change detection, this creates an alarm when
+        the MAC address on a port changes, showing old and new values.
+        This is independent of the "expected MAC" configuration check.
+        """
+        
+        current_mac = current.mac_address.upper() if current.mac_address else ""
+        previous_mac = previous.mac_address.upper() if previous.mac_address else ""
+        
+        # Normalize empty strings
+        current_mac = current_mac.strip()
+        previous_mac = previous_mac.strip()
+        
+        if current_mac != previous_mac:
+            change_details = (
+                f"MAC address changed on {device.name} port {current.port_number} "
+                f"from '{previous_mac or '(empty)'}' to '{current_mac or '(empty)'}'"
+            )
+            
+            change = PortChangeHistory(
+                device_id=device.id,
+                port_number=current.port_number,
+                change_type=ChangeType.MAC_MOVED,  # Reuse MAC_MOVED type
+                change_timestamp=datetime.utcnow(),
+                old_mac_address=previous_mac or None,
+                new_mac_address=current_mac or None,
+                change_details=change_details
+            )
+            session.add(change)
+            session.flush()
+            
+            # Create alarm for MAC address change
+            alarm, is_new = self.db_manager.get_or_create_alarm(
+                session,
+                device,
+                "mac_moved",
+                "HIGH",  # High severity like other MAC alarms
+                f"MAC address changed on port {current.port_number}",
+                change_details,
+                port_number=current.port_number,
+                mac_address=current_mac or None
+            )
+            
+            if alarm:
+                change.alarm_created = True
+                change.alarm_id = alarm.id
+                alarm.old_value = previous_mac or '(empty)'
+                alarm.new_value = current_mac or '(empty)'
+                
+                # Send notifications for new alarms
+                if is_new:
+                    self.alarm_manager._send_notifications(
+                        device,
+                        "mac_moved",
+                        "HIGH",
+                        change_details,
+                        port_number=current.port_number,
+                        port_name=f"Port {current.port_number}"
+                    )
+                    alarm.notification_sent = True
+                    alarm.last_notification_sent = datetime.utcnow()
+            
+            self.logger.warning(change_details)
             
             return change
         
