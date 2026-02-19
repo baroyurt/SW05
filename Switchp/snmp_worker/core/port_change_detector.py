@@ -1130,6 +1130,9 @@ class PortChangeDetector:
         alarm_mac = current_macs[0] if current_macs else None
         
         # Create alarm for MAC mismatch
+        # IMPORTANT: skip_whitelist=True because this is a configuration mismatch
+        # User expects one MAC but SNMP sees another - whitelist shouldn't suppress this
+        # Kullanıcı bir MAC bekliyor ama SNMP başka MAC görüyor - whitelist bunu suppress etmemeli
         alarm, is_new = self.db_manager.get_or_create_alarm(
             session,
             device,
@@ -1138,7 +1141,8 @@ class PortChangeDetector:
             f"MAC mismatch on port {current.port_number}",
             change_details,
             port_number=current.port_number,
-            mac_address=alarm_mac  # Include MAC in fingerprint
+            mac_address=alarm_mac,  # Include MAC in fingerprint
+            skip_whitelist=True  # Skip whitelist for configuration mismatches
         )
         
         if alarm:

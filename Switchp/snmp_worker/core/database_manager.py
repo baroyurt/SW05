@@ -253,7 +253,8 @@ class DatabaseManager:
         from_port: Optional[int] = None,
         to_port: Optional[int] = None,
         old_vlan_id: Optional[int] = None,
-        new_vlan_id: Optional[int] = None
+        new_vlan_id: Optional[int] = None,
+        skip_whitelist: bool = False
     ) -> tuple[Alarm, bool]:
         """
         Get existing active alarm or create new one with uniqueness checking.
@@ -265,7 +266,8 @@ class DatabaseManager:
         - from_port
         - to_port
         
-        If alarm is whitelisted (acknowledged_port_mac), no alarm is created.
+        If alarm is whitelisted (acknowledged_port_mac), no alarm is created
+        (unless skip_whitelist=True).
         
         Args:
             session: Database session
@@ -280,6 +282,7 @@ class DatabaseManager:
             to_port: Destination port for MAC moved alarms
             old_vlan_id: Old VLAN ID (for VLAN change tracking)
             new_vlan_id: New VLAN ID (for VLAN change tracking)
+            skip_whitelist: Skip whitelist check (for config mismatch alarms)
             
         Returns:
             Tuple of (Alarm instance or None, is_new)
@@ -304,8 +307,12 @@ class DatabaseManager:
         elif not isinstance(severity, AlarmSeverity):
             severity = AlarmSeverity.MEDIUM
         
-        # Check whitelist for MAC+Port alarms
-        if mac_address and port_number:
+        # Check whitelist for MAC+Port alarms (unless skip_whitelist is True)
+        # Configuration mismatch alarms should skip whitelist because:
+        # - Whitelist means "this MAC on this port is expected/normal"
+        # - Config mismatch means "user expects DIFFERENT MAC than what's there"
+        # - These two situations are contradictory
+        if mac_address and port_number and not skip_whitelist:
             whitelisted = self._check_whitelist(session, device.name, port_number, mac_address)
             if whitelisted:
                 self.logger.info(
