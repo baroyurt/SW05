@@ -320,6 +320,11 @@ class DatabaseManager:
                     f"MAC {mac_address}"
                 )
                 return None, False
+        elif mac_address and port_number and skip_whitelist:
+            self.logger.warning(
+                f"⚠️ WHITELIST ATLATILDI (skip_whitelist=True): {device.name} port {port_number} "
+                f"MAC {mac_address} - Config mismatch alarm oluşturuluyor"
+            )
         
         # Create alarm fingerprint for uniqueness check
         fingerprint = self._create_alarm_fingerprint(
@@ -365,6 +370,18 @@ class DatabaseManager:
         )
         session.add(alarm)
         session.flush()
+        
+        self.logger.warning("=" * 80)
+        self.logger.warning(f"🚨 YENİ ALARM OLUŞTURULDU!")
+        self.logger.warning(f"   Alarm ID: {alarm.id}")
+        self.logger.warning(f"   Device: {device.name}")
+        self.logger.warning(f"   Type: {alarm_type}")
+        self.logger.warning(f"   Severity: {severity}")
+        self.logger.warning(f"   Port: {port_number}")
+        self.logger.warning(f"   MAC: {mac_address}")
+        self.logger.warning(f"   Fingerprint: {fingerprint}")
+        self.logger.warning(f"   skip_whitelist was: {skip_whitelist}")
+        self.logger.warning("=" * 80)
         
         # Add to history
         history = AlarmHistory(
