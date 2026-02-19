@@ -17,6 +17,7 @@
  * - Validation helper fonksiyonları
  * - Migration istatistikleri görüntüleme
  * - Detaylı hata mesajları ve timing bilgisi
+ * - VLAN izleme kolonları (old_vlan_id, new_vlan_id) alarms tablosuna eklendi
  *
  * KULLANIM:
  * 1. Yeni bir SQL migration eklemek için:
@@ -895,7 +896,25 @@ $steps[] = [
     }
 ];
 
-/* 45) Apply SQL migrations from snmp_worker/migrations/ folder */
+/* 45) Add old_vlan_id column to alarms table for VLAN change tracking */
+$steps[] = [
+    'name' => "alarms: add old_vlan_id column",
+    'check' => function($c){ return columnExists($c,'alarms','old_vlan_id'); },
+    'apply' => function($c){ 
+        return $c->query("ALTER TABLE alarms ADD COLUMN old_vlan_id INT DEFAULT NULL AFTER to_port");
+    }
+];
+
+/* 46) Add new_vlan_id column to alarms table for VLAN change tracking */
+$steps[] = [
+    'name' => "alarms: add new_vlan_id column",
+    'check' => function($c){ return columnExists($c,'alarms','new_vlan_id'); },
+    'apply' => function($c){ 
+        return $c->query("ALTER TABLE alarms ADD COLUMN new_vlan_id INT DEFAULT NULL AFTER old_vlan_id");
+    }
+];
+
+/* 47) Apply SQL migrations from snmp_worker/migrations/ folder */
 $migrationFiles = [
     'create_migration_tracker.sql',
     'add_mac_tracking_tables.sql',
@@ -935,7 +954,7 @@ foreach ($migrationFiles as $migrationFile) {
     ];
 }
 
-/* 46) Validation: Critical columns check */
+/* 48) Validation: Critical columns check */
 $steps[] = [
     'name' => "Validation: Critical columns exist",
     'check' => function($c) {
@@ -952,7 +971,7 @@ $steps[] = [
     }
 ];
 
-/* 47) Remove unused/deprecated columns */
+/* 49) Remove unused/deprecated columns */
 // DIKKAT: Production'da çalıştırmadan önce yedek alın!
 $unusedColumns = [
     // Örnek: ['table' => 'ports', 'column' => 'old_column_name'],
