@@ -917,9 +917,49 @@ class PortChangeDetector:
         self.logger.info("=" * 80)
         
         if current_mac != previous_mac:
+            # ÖNEMLI: Sadece MAC-to-MAC değişikliklerinde alarm oluştur
+            # Empty durumları (cihaz çıkarıldı/takıldı) için alarm oluşturma
+            # IMPORTANT: Only create alarm for MAC-to-MAC changes
+            # Don't alarm on empty states (device disconnected/connected)
+            
+            # Check if this is a meaningful change (both MACs are non-empty)
+            both_have_mac = bool(previous_mac) and bool(current_mac)
+            
+            if not both_have_mac:
+                # One or both MACs are empty - this is connect/disconnect, not device swap
+                self.logger.info(
+                    f"   ℹ️ MAC değişikliği tespit edildi ama alarm oluşturulmayacak: "
+                    f"'{previous_mac or '(boş)'}' → '{current_mac or '(boş)'}'"
+                )
+                if not previous_mac and current_mac:
+                    self.logger.info(f"   Sebep: Yeni cihaz bağlandı (empty → MAC)")
+                elif previous_mac and not current_mac:
+                    self.logger.info(f"   Sebep: Cihaz çıkarıldı (MAC → empty)")
+                else:
+                    self.logger.info(f"   Sebep: Her ikisi de boş")
+                
+                # Still create change history but no alarm
+                change = PortChangeHistory(
+                    device_id=device.id,
+                    port_number=current.port_number,
+                    change_type=ChangeType.MAC_MOVED,
+                    change_timestamp=datetime.utcnow(),
+                    old_mac_address=previous_mac or None,
+                    new_mac_address=current_mac or None,
+                    change_details=(
+                        f"MAC changed on {device.name} port {current.port_number} "
+                        f"from '{previous_mac or '(empty)'}' to '{current_mac or '(empty)'}' "
+                        f"(no alarm - device {'connected' if current_mac else 'disconnected'})"
+                    )
+                )
+                session.add(change)
+                self.logger.debug(f"   Change history kaydedildi (alarm olmadan)")
+                return change
+            
+            # Both MACs are non-empty - this is a device swap, create alarm!
             change_details = (
                 f"MAC address changed on {device.name} port {current.port_number} "
-                f"from '{previous_mac or '(empty)'}' to '{current_mac or '(empty)'}'"
+                f"from '{previous_mac}' to '{current_mac}'"
             )
             
             self.logger.warning("🚨 MAC DEĞİŞİKLİĞİ TESPİT EDİLDİ!")
