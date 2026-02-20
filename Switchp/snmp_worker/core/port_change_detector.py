@@ -42,6 +42,33 @@ class PortChangeDetector:
         
         self.logger.info("Port Change Detector initialized")
     
+    def _is_fiber_port(self, port_data: PortStatusData) -> bool:
+        """
+        Check if a port is a fiber/SFP port.
+        
+        Fiber ports (uplink/trunk ports) should not generate MAC/description change alarms
+        as they carry traffic from multiple devices and MACs change frequently.
+        
+        Args:
+            port_data: Port status data
+            
+        Returns:
+            True if port is a fiber/SFP port
+        """
+        port_name = (port_data.port_name or '').lower()
+        port_alias = (port_data.port_alias or '').lower()
+        
+        # Check if port name or alias contains fiber/SFP indicators
+        fiber_keywords = ['sfp', 'fiber', 'uplink', 'trunk']
+        
+        # Also check port number - on CBS350, ports 25-28 are typically SFP ports
+        is_high_port = port_data.port_number >= 25
+        
+        has_fiber_keyword = any(keyword in port_name or keyword in port_alias 
+                                for keyword in fiber_keywords)
+        
+        return has_fiber_keyword or is_high_port
+    
     def detect_and_record_changes(
         self,
         session: Session,
@@ -825,6 +852,15 @@ class PortChangeDetector:
     ) -> Optional[PortChangeHistory]:
         """Detect port description changes."""
         
+        # Skip alarm creation for fiber/SFP ports
+        # Fiber ports are uplink/trunk ports and description changes are not meaningful
+        if self._is_fiber_port(current):
+            self.logger.debug(
+                f"Skipping description change alarm for fiber port {device.name} "
+                f"port {current.port_number}"
+            )
+            return None
+        
         current_desc = current.port_alias or current.port_description or ""
         previous_desc = previous.port_alias or previous.port_description or ""
         
@@ -899,7 +935,18 @@ class PortChangeDetector:
         Similar to description change detection, this creates an alarm when
         the MAC address on a port changes, showing old and new values.
         This is independent of the "expected MAC" configuration check.
+        
+        NOTE: Skip alarm creation for fiber/SFP ports as they carry traffic
+        from multiple devices and MACs change frequently (uplink behavior).
         """
+        
+        # Skip alarm creation for fiber/SFP ports
+        if self._is_fiber_port(current):
+            self.logger.debug(
+                f"Skipping MAC change alarm for fiber port {device.name} "
+                f"port {current.port_number}"
+            )
+            return None
         
         current_mac = current.mac_address.upper() if current.mac_address else ""
         previous_mac = previous.mac_address.upper() if previous.mac_address else ""
