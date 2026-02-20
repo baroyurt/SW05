@@ -42,6 +42,33 @@ class PortChangeDetector:
         
         self.logger.info("Port Change Detector initialized")
     
+    def _is_fiber_port(self, port_data: PortStatusData) -> bool:
+        """
+        Check if a port is a fiber/SFP port.
+        
+        Fiber ports (uplink/trunk ports) should not generate MAC/description change alarms
+        as they carry traffic from multiple devices and MACs change frequently.
+        
+        Args:
+            port_data: Port status data
+            
+        Returns:
+            True if port is a fiber/SFP port
+        """
+        port_name = (port_data.port_name or '').lower()
+        port_alias = (port_data.port_alias or '').lower()
+        
+        # Check if port name or alias contains fiber/SFP indicators
+        fiber_keywords = ['sfp', 'fiber', 'uplink', 'trunk']
+        
+        # Also check port number - on CBS350, ports 25-28 are typically SFP ports
+        is_high_port = port_data.port_number >= 25
+        
+        has_fiber_keyword = any(keyword in port_name or keyword in port_alias 
+                                for keyword in fiber_keywords)
+        
+        return has_fiber_keyword or is_high_port
+    
     def detect_and_record_changes(
         self,
         session: Session,
@@ -115,6 +142,16 @@ class PortChangeDetector:
         )
         if desc_change:
             changes.append(desc_change)
+        
+        # Check for MAC address changes (comparing snapshots)
+        mac_addr_change = self._detect_mac_address_change(
+            session,
+            device,
+            current_port_data,
+            previous_snapshot
+        )
+        if mac_addr_change:
+            changes.append(mac_addr_change)
         
         # Check for MAC configuration mismatches (expected vs actual)
         mac_config_change = self._detect_mac_config_mismatch(
@@ -356,7 +393,8 @@ class PortChangeDetector:
                     mac_tracking.current_port_number,
                     device,
                     port_number,
-                    vlan_id
+                    vlan_id,
+                    old_vlan_id=mac_tracking.current_vlan_id
                 )
                 
                 # Update MAC tracking
@@ -586,7 +624,8 @@ class PortChangeDetector:
         old_port: Optional[int],
         new_device: SNMPDevice,
         new_port: int,
-        vlan_id: Optional[int]
+        vlan_id: Optional[int],
+        old_vlan_id: Optional[int] = None
     ) -> PortChangeHistory:
         """Record a MAC address movement and create alarm."""
         
@@ -695,7 +734,9 @@ class PortChangeDetector:
             port_number=new_port,
             mac_address=mac_address,
             from_port=old_port,
-            to_port=new_port
+            to_port=new_port,
+            old_vlan_id=old_vlan_id,
+            new_vlan_id=vlan_id
         )
         
         if alarm:
@@ -811,6 +852,15 @@ class PortChangeDetector:
     ) -> Optional[PortChangeHistory]:
         """Detect port description changes."""
         
+        # Skip alarm creation for fiber/SFP ports
+        # Fiber ports are uplink/trunk ports and description changes are not meaningful
+        if self._is_fiber_port(current):
+            self.logger.debug(
+                f"Skipping description change alarm for fiber port {device.name} "
+                f"port {current.port_number}"
+            )
+            return None
+        
         current_desc = current.port_alias or current.port_description or ""
         previous_desc = previous.port_alias or previous.port_description or ""
         
@@ -855,6 +905,186 @@ class PortChangeDetector:
         
         return None
     
+    def _detect_mac_address_change(
+        self,
+        session: Session,
+        device: SNMPDevice,
+        current: PortStatusData,
+        previous: PortSnapshot
+    ) -> Optional[PortChangeHistory]:
+        """
+        SNMP snapshot'ları karşılaştırarak MAC adresi değişikliklerini tespit et.
+        
+        Detect MAC address changes by comparing current vs previous snapshot.
+        
+        TÜRKÇE AÇIKLAMA:
+        Bu fonksiyon, SNMP'nin önceki taramada gördüğü MAC ile şimdiki taramada
+        gördüğü MAC'i karşılaştırır. Fiziksel olarak cihaz değiştirildiğinde çalışır.
+        
+        FARK NEDİR?
+        1. _detect_mac_address_change (BU FONKSİYON):
+           - SNMP önceki tarama: MAC = 12:74
+           - SNMP şimdiki tarama: MAC = 12:6a
+           - Fiziksel cihaz değişti, alarm oluştur
+        
+        2. _detect_mac_config_mismatch (DİĞER FONKSİYON):
+           - Kullanıcı UI'da kaydettiği: MAC = 12:6a
+           - SNMP cihazdan okuduğu: MAC = 12:74
+           - Kullanıcının beklediği ile gerçek farklı, alarm oluştur
+        
+        Similar to description change detection, this creates an alarm when
+        the MAC address on a port changes, showing old and new values.
+        This is independent of the "expected MAC" configuration check.
+        
+        NOTE: Skip alarm creation for fiber/SFP ports as they carry traffic
+        from multiple devices and MACs change frequently (uplink behavior).
+        """
+        
+        # Skip alarm creation for fiber/SFP ports
+        if self._is_fiber_port(current):
+            self.logger.debug(
+                f"Skipping MAC change alarm for fiber port {device.name} "
+                f"port {current.port_number}"
+            )
+            return None
+        
+        current_mac = current.mac_address.upper() if current.mac_address else ""
+        previous_mac = previous.mac_address.upper() if previous.mac_address else ""
+        
+        # Normalize empty strings
+        current_mac = current_mac.strip()
+        previous_mac = previous_mac.strip()
+        
+        # DEBUG LOGGING - Her zaman göster
+        self.logger.info("=" * 80)
+        self.logger.info(f"🔍 MAC DEĞİŞİKLİĞİ KONTROLÜ - {device.name} Port {current.port_number}")
+        self.logger.info(f"   Önceki MAC: '{previous_mac}'")
+        self.logger.info(f"   Şimdiki MAC: '{current_mac}'")
+        self.logger.info(f"   Eşit mi? {current_mac == previous_mac}")
+        self.logger.info("=" * 80)
+        
+        if current_mac != previous_mac:
+            # ÖNEMLI: Sadece MAC-to-MAC değişikliklerinde alarm oluştur
+            # Empty durumları (cihaz çıkarıldı/takıldı) için alarm oluşturma
+            # IMPORTANT: Only create alarm for MAC-to-MAC changes
+            # Don't alarm on empty states (device disconnected/connected)
+            
+            # Check if this is a meaningful change (both MACs are non-empty)
+            both_have_mac = bool(previous_mac) and bool(current_mac)
+            
+            self.logger.warning("=" * 80)
+            self.logger.warning(f"🔍 _detect_mac_address_change ÇALIŞTI")
+            self.logger.warning(f"   Önceki MAC: '{previous_mac}'")
+            self.logger.warning(f"   Şimdiki MAC: '{current_mac}'")
+            self.logger.warning(f"   both_have_mac: {both_have_mac}")
+            self.logger.warning("=" * 80)
+            
+            if not both_have_mac:
+                # One or both MACs are empty - this is connect/disconnect, not device swap
+                self.logger.info(
+                    f"   ℹ️ MAC değişikliği tespit edildi ama alarm oluşturulmayacak: "
+                    f"'{previous_mac or '(boş)'}' → '{current_mac or '(boş)'}'"
+                )
+                if not previous_mac and current_mac:
+                    self.logger.info(f"   Sebep: Yeni cihaz bağlandı (empty → MAC)")
+                elif previous_mac and not current_mac:
+                    self.logger.info(f"   Sebep: Cihaz çıkarıldı (MAC → empty)")
+                else:
+                    self.logger.info(f"   Sebep: Her ikisi de boş")
+                
+                # Still create change history but no alarm
+                change = PortChangeHistory(
+                    device_id=device.id,
+                    port_number=current.port_number,
+                    change_type=ChangeType.MAC_MOVED,
+                    change_timestamp=datetime.utcnow(),
+                    old_mac_address=previous_mac or None,
+                    new_mac_address=current_mac or None,
+                    change_details=(
+                        f"MAC changed on {device.name} port {current.port_number} "
+                        f"from '{previous_mac or '(empty)'}' to '{current_mac or '(empty)'}' "
+                        f"(no alarm - device {'connected' if current_mac else 'disconnected'})"
+                    )
+                )
+                session.add(change)
+                self.logger.debug(f"   Change history kaydedildi (alarm olmadan)")
+                return change
+            
+            # Both MACs are non-empty - this is a device swap, create alarm!
+            change_details = (
+                f"MAC address changed on {device.name} port {current.port_number} "
+                f"from '{previous_mac}' to '{current_mac}'"
+            )
+            
+            self.logger.warning("🚨 MAC DEĞİŞİKLİĞİ TESPİT EDİLDİ!")
+            self.logger.warning(f"   Change Details: {change_details}")
+            
+            change = PortChangeHistory(
+                device_id=device.id,
+                port_number=current.port_number,
+                change_type=ChangeType.MAC_MOVED,  # Reuse MAC_MOVED type
+                change_timestamp=datetime.utcnow(),
+                old_mac_address=previous_mac or None,
+                new_mac_address=current_mac or None,
+                change_details=change_details
+            )
+            session.add(change)
+            session.flush()
+            
+            self.logger.warning(f"   ✅ Change History kaydedildi (ID: {change.id})")
+            
+            # Create alarm for MAC address change
+            self.logger.warning(f"   📢 Alarm oluşturuluyor...")
+            alarm, is_new = self.db_manager.get_or_create_alarm(
+                session,
+                device,
+                "mac_moved",
+                "HIGH",  # High severity like other MAC alarms
+                f"MAC address changed on port {current.port_number}",
+                change_details,
+                port_number=current.port_number,
+                mac_address=current_mac or None
+            )
+            
+            if alarm:
+                self.logger.warning(f"   ✅ Alarm {'OLUŞTURULDU' if is_new else 'GÜNCELLENDI'} (ID: {alarm.id})")
+                change.alarm_created = True
+                change.alarm_id = alarm.id
+                # Açıklama değişikliği gibi format
+                # Format like description changes
+                alarm.old_value = previous_mac or '(empty)'
+                alarm.new_value = current_mac or '(empty)'
+                
+                self.logger.warning(f"   Alarm Old Value: {alarm.old_value}")
+                self.logger.warning(f"   Alarm New Value: {alarm.new_value}")
+                
+                # Send notifications for new alarms
+                if is_new:
+                    self.logger.warning(f"   📧 Bildirim gönderiliyor...")
+                    self.alarm_manager._send_notifications(
+                        device,
+                        "mac_moved",
+                        "HIGH",
+                        change_details,
+                        port_number=current.port_number,
+                        port_name=f"Port {current.port_number}"
+                    )
+                    alarm.notification_sent = True
+                    alarm.last_notification_sent = datetime.utcnow()
+                    self.logger.warning(f"   ✅ Bildirim gönderildi!")
+                else:
+                    self.logger.warning(f"   ⚠️ Yeni alarm değil, bildirim gönderilmedi")
+            else:
+                self.logger.error(f"   ❌ ALARM OLUŞTURULAMADI!")
+            
+            self.logger.warning(change_details)
+            
+            return change
+        else:
+            self.logger.debug(f"   ℹ️ MAC değişmedi, alarm gerekmiyor")
+        
+        return None
+    
     def _detect_mac_config_mismatch(
         self,
         session: Session,
@@ -863,19 +1093,32 @@ class PortChangeDetector:
         previous: PortSnapshot
     ) -> Optional[PortChangeHistory]:
         """
+        MAC adresi yapılandırma uyuşmazlıklarını tespit et.
+        
         Detect MAC address configuration mismatches.
+        
+        TÜRKÇE AÇIKLAMA:
+        Bu fonksiyon, kullanıcının ports tablosunda kaydettiği "beklenen MAC" ile
+        SNMP'nin cihazdan okuduğu "gerçek MAC" arasındaki farkı kontrol eder.
+        
+        FARK NEDİR?
+        - Açıklama değişikliği: SNMP switch'ten okur, switch üzerinde değişir
+        - MAC değişikliği: Kullanıcı UI'da değiştirir ama cihaz aynı kalır
+        
+        SENARYO:
+        1. Kullanıcı port'a MAC adresi yazıyor (ör: d0:ad:08:e4:12:6a)
+        2. SNMP cihazdan farklı MAC görüyor (ör: d0:ad:08:e4:12:74)
+        3. Bu fonksiyon uyuşmazlığı tespit edip alarm oluşturuyor
         
         Checks if the MAC address configured in the ports table differs from
         what SNMP actually finds on the port. This detects cases where:
         1. User manually configures an expected MAC in the ports table
         2. SNMP discovers a different MAC on that port
         3. This indicates unauthorized device or configuration error
-        
-        Similar to description change detection, this creates an alarm
-        when configured values don't match reality.
         """
         
         # Get the expected/configured MAC from ports table
+        # Ports tablosundan beklenen/yapılandırılmış MAC'i al
         expected_mac = self._get_expected_mac_for_port(session, device, current.port_number)
         
         self.logger.debug(
@@ -884,11 +1127,13 @@ class PortChangeDetector:
         )
         
         # If no expected MAC is configured, nothing to check
+        # Beklenen MAC yapılandırılmamışsa, kontrol etmeye gerek yok
         if not expected_mac:
             self.logger.debug(f"No expected MAC configured for port {current.port_number}, skipping check")
             return None
         
         # Get current MAC from SNMP data
+        # SNMP verilerinden mevcut MAC'i al
         current_macs = self._parse_mac_addresses(
             current.mac_address,
             current.mac_addresses
@@ -899,18 +1144,23 @@ class PortChangeDetector:
         )
         
         # Check if expected MAC is present
+        # Beklenen MAC mevcut mu kontrol et
         if expected_mac in current_macs:
             # Expected MAC found - no mismatch
+            # Beklenen MAC bulundu - uyuşmazlık yok
             self.logger.debug(
                 f"Expected MAC {expected_mac} found on port {current.port_number} - no alarm"
             )
             return None
         
         # Mismatch detected! Expected MAC not found on port
+        # Uyuşmazlık tespit edildi! Beklenen MAC port'ta bulunamadı
+        
         # Determine what MAC is actually there
         actual_mac = current.mac_address.upper() if current.mac_address else None
         
         # Check if port has no MAC (device disconnected)
+        # Port'ta MAC var mı kontrol et (cihaz bağlantısı kesilmiş olabilir)
         if not current_macs:
             # Port is empty but we expected a MAC
             # Check if we already have a tracking entry for this port
@@ -942,12 +1192,12 @@ class PortChangeDetector:
             return None
         
         # Port has MAC(s) but not the expected one - this IS a real mismatch
+        # Port'ta MAC var ama beklenen değil - bu GERÇEK bir uyuşmazlık
         actual_mac_list = ', '.join(sorted(current_macs))
         change_details = (
-            f"MAC configuration mismatch on {device.name} port {current.port_number}: "
+            f"MAC address mismatch on {device.name} port {current.port_number}: "
             f"Expected '{expected_mac}' but found '{actual_mac_list}'"
         )
-        actual_mac_display = actual_mac_list
         
         self.logger.warning("=" * 80)
         self.logger.warning(f"⚠️ ⚠️ ⚠️  MAC CONFIGURATION MISMATCH DETECTED  ⚠️ ⚠️ ⚠️")
@@ -971,9 +1221,13 @@ class PortChangeDetector:
         self.logger.warning(f"✅ Creating MAC mismatch alarm for {device.name} port {current.port_number}")
         
         # Use the first actual MAC for alarm fingerprint (or all if multiple)
-        alarm_mac = current_macs[0] if current_macs else None
+        # current_macs is a SET, need to convert to list to get first element
+        alarm_mac = list(current_macs)[0] if current_macs else None
         
         # Create alarm for MAC mismatch
+        # IMPORTANT: skip_whitelist=True because this is a configuration mismatch
+        # User expects one MAC but SNMP sees another - whitelist shouldn't suppress this
+        # Kullanıcı bir MAC bekliyor ama SNMP başka MAC görüyor - whitelist bunu suppress etmemeli
         alarm, is_new = self.db_manager.get_or_create_alarm(
             session,
             device,
@@ -982,20 +1236,38 @@ class PortChangeDetector:
             f"MAC mismatch on port {current.port_number}",
             change_details,
             port_number=current.port_number,
-            mac_address=alarm_mac  # Include MAC in fingerprint
+            mac_address=alarm_mac,  # Include MAC in fingerprint
+            skip_whitelist=True  # Skip whitelist for configuration mismatches
         )
         
         if alarm:
             change.alarm_created = True
             change.alarm_id = alarm.id
-            alarm.old_value = f"Expected: {expected_mac}"
-            alarm.new_value = f"Found: {actual_mac_display}"
+            # AÇIKLAMA DEĞİŞİKLİĞİ GİBİ FORMAT: Eski Değer / Yeni Değer
+            # Format like description changes: Old Value / New Value
+            alarm.old_value = expected_mac  # Kullanıcının beklediği MAC (UI'da yazdığı)
+            alarm.new_value = actual_mac_list  # SNMP'nin gördüğü gerçek MAC
+            
+            # Send notifications for new alarms
+            if is_new:
+                self.alarm_manager._send_notifications(
+                    device,
+                    "mac_moved",
+                    "HIGH",
+                    change_details,
+                    port_number=current.port_number,
+                    port_name=f"Port {current.port_number}"
+                )
+                alarm.notification_sent = True
+                alarm.last_notification_sent = datetime.utcnow()
+            
             self.logger.warning("=" * 80)
             self.logger.warning(f"✅ ✅ ✅  MAC MISMATCH ALARM CREATED SUCCESSFULLY  ✅ ✅ ✅")
             self.logger.warning(f"Alarm ID: {alarm.id}")
             self.logger.warning(f"Is New: {is_new}")
-            self.logger.warning(f"Old Value: {alarm.old_value}")
-            self.logger.warning(f"New Value: {alarm.new_value}")
+            self.logger.warning(f"Notification Sent: {is_new}")
+            self.logger.warning(f"Old Value (Expected): {alarm.old_value}")
+            self.logger.warning(f"New Value (Found): {alarm.new_value}")
             self.logger.warning(f"Severity: HIGH")
             self.logger.warning("=" * 80)
         else:

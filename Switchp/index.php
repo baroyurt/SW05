@@ -4171,7 +4171,7 @@ function confirmDeleteRack(rackId) {
                 // VLAN bilgisi SNMP'den varsa, VLAN seçeneğini otomatik seç
                 // Debug logging - Tarayıcı console'da (F12) görmek için
                 console.log('Port VLAN Debug:', {
-                    port_no: portId,
+                    port_no: portNumber,
                     snmp_vlan_id: existingConnection.snmp_vlan_id,
                     snmp_vlan_name: existingConnection.snmp_vlan_name,
                     current_type: existingConnection.type
