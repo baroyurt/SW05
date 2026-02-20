@@ -133,10 +133,11 @@ class CiscoCBS350Mapper(VendorOIDMapper):
                 
                 # Filter for physical ethernet ports
                 # CBS350 uses names like "gi1", "gi2" or "Gi1/0/1"
-                # Also include fiber/SFP ports (typically gi25-gi28 or similar)
-                if any(x in descr.lower() for x in ['gi', 'gigabit', 'ethernet', 'sfp', 'fiber']):
-                    # Skip management, virtual interfaces, and port-channels
-                    if not any(x in descr.lower() for x in ['vlan', 'management', 'null', 'loopback', 'port-channel']):
+                # NOTE: Excluding fiber/SFP ports as they generate constant MAC change alarms
+                # due to traffic passing through them. User will handle them separately.
+                if any(x in descr.lower() for x in ['gi', 'gigabit', 'ethernet']):
+                    # Skip management, virtual interfaces, port-channels, and fiber/SFP ports
+                    if not any(x in descr.lower() for x in ['vlan', 'management', 'null', 'loopback', 'port-channel', 'sfp', 'fiber']):
                         ports[if_index] = {
                             'port_number': if_index,
                             'port_name': descr,
@@ -213,7 +214,7 @@ class CiscoCBS350Mapper(VendorOIDMapper):
             port_name = port_data.get('port_name', '').lower()
             
             # Try to extract number from names like "gi7", "gi1/0/7", "GigabitEthernet7"
-            # Also handle SFP/fiber port names
+            # Note: Excluding SFP/fiber ports to prevent constant alarms
             import re
             match = re.search(r'(\d+)(?:/0/(\d+))?$', port_name)
             if match:
